@@ -1,0 +1,123 @@
+#include "socket_Sever.h"
+#include "tcp_socket_interface.h"
+
+#if 0
+
+typedef struct
+{
+    mqd_t mqd;
+    struct  control *ctrl_phead;
+}ctrl_info_t;
+
+#endif
+
+static int s_fd = -1;
+
+int tcp_socket_interface_init()
+{
+    s_fd = socket_init();
+    if(s_fd == -1)
+    {
+        perror("socket_init");
+
+        return -1;
+    }
+
+    return s_fd;
+}
+
+void tcp_socket_final()
+{
+    close(s_fd);
+}
+
+void* tcp_socket_get(void *arg)
+{
+    char buf[6] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    struct sockaddr_in c_addr;
+    ctrl_info_t *ctrl_info = NULL;
+    int n_receive = 0;
+    int c_fd = -1;
+    mqd_t mqd = -1;
+
+    if(arg != NULL)
+    {
+        ctrl_info = (ctrl_info_t *)arg;
+    }
+
+    if(ctrl_info != NULL)
+    {
+        mqd = ctrl_info->mqd;
+    }
+
+    if(mqd == -1)
+    {
+        pthread_exit(NULL);
+    }
+
+    s_fd = tcp_socket_interface_init();
+    if(s_fd == -1)
+    {
+        pthread_exit(NULL);
+    }
+    
+    pthread_detach(pthread_self());
+
+    printf("%s|%s|%d:\n", __FILE__, __FUNCTION__, __LINE__);
+
+    int clen = sizeof(struct sockaddr_in);
+    while(1)
+    {   
+        printf("%s|%s|%d:tid = %ld\n", __FILE__, __FUNCTION__, __LINE__, pthread_self());
+        c_fd = accept(s_fd, (struct sockaddr *)&c_addr, &clen);
+        if(c_fd == -1)
+        {
+            perror("accept");
+
+            continue;
+        }
+
+        int keepalive = 1;          // 开启TCP KeepAlive功能
+        int keepidle = 5;           // tcp_keepalive_time 3s内没收到数据开始发送心跳包
+        int keepcnt = 3;            // tcp_keepalive_probes 每次发送心跳包的时间间隔,单位秒
+        int keepintvl = 3;          // tcp_keepalive_intvl 每3s发送一次心跳包
+        setsockopt(c_fd, SOL_SOCKET, SO_KEEPALIVE, (void *)&keepalive, sizeof(keepalive));
+        setsockopt(c_fd, SOL_TCP, TCP_KEEPIDLE, (void *) &keepidle, sizeof(keepidle));
+        setsockopt(c_fd, SOL_TCP, TCP_KEEPCNT, (void *)&keepcnt, sizeof(keepcnt));
+        setsockopt(c_fd, SOL_TCP, TCP_KEEPINTVL, (void *)&keepintvl, sizeof(keepintvl));
+
+        printf("%s|%s|%d|Accepted a connection from %s:%d\n", __FILE__, __func__, __LINE__,inet_ntoa(c_addr.sin_addr), ntohs(c_addr.sin_port)); // 打印客户端的IP地址和端口号
+
+        while(1)
+        {
+            n_receive = recv(c_fd, buf, sizeof(buf), 0);
+            if(n_receive > 0)
+            {
+                if(buf[0] == 0xAA && buf[1] == 0x55 && buf[4] == 0x55 && buf[5] == 0xAA)
+                {
+                    printf("%s|%s|%d:send 0x%x, 0x%x,0x%x, 0x%x, 0x%x,0x%x\n", __FILE__, __func__, __LINE__, buf[0], buf[1], buf[2], buf[3], buf[4],buf[5]);
+                    message_queue_send(mqd, buf, n_receive);
+                }
+            }
+            memset(buf, 0, sizeof(buf));
+        }
+    }
+    
+    pthread_exit(NULL);
+}
+
+struct control tcp_socket = 
+{
+    .control_name = "tcp_socket",
+    .init = tcp_socket_interface_init,
+    .final = tcp_socket_final,
+    .get = tcp_socket_get,
+    .set = NULL,
+    .next = NULL
+};
+
+struct control* add_tcp_socket_to_ctrl_list(struct control* phead)
+{
+    return add_control_to_ctrl_list(phead, &tcp_socket);
+//    printf("%s|%s|%d:\n", __FILE__, __FUNCTION__, __LINE__);
+}
